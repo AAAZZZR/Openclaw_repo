@@ -78,6 +78,18 @@
       </div>
     </div>
 
+    <!-- By Agent -->
+    <div class="section">
+      <h2>By Agent</h2>
+      <div class="by-model" id="by-agent"><div class="loading">Loading...</div></div>
+    </div>
+
+    <!-- By Agent -->
+    <div class="section">
+      <h2>By Agent</h2>
+      <div class="by-model" id="by-agent"><div class="loading">Loading...</div></div>
+    </div>
+
     <!-- By Model -->
     <div class="section">
       <h2>By Model</h2>
@@ -126,6 +138,19 @@
       document.getElementById("total-input").textContent = fmtNum(data.totalTokens?.input);
       document.getElementById("total-output").textContent = fmtNum(data.totalTokens?.output);
 
+      // By Agent
+      const byAgent = data.byAgent || {};
+      const ael = document.getElementById("by-agent");
+      if (ael) {
+        ael.innerHTML = Object.keys(byAgent).length ? Object.entries(byAgent).map(([agent, v]) => `
+          <div class="model-card">
+            <div class="mname">🤖 ${agent}</div>
+            <div class="mstat">${v.sessions} sessions · ${(v.tokens||0).toLocaleString()} tokens · <span class="cost-value">${v.costStr}</span></div>
+          </div>
+        `).join("") : '<div class="loading">No data</div>';
+      }
+
+      // By Model
       const byModel = data.byModel || {};
       const el = document.getElementById("by-model");
       if (!Object.keys(byModel).length) { el.innerHTML = '<div class="loading">No data</div>'; return; }

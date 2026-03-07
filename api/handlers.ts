@@ -1,45 +1,59 @@
 import { callTool, calcCost, MODEL_PRICING } from "./index";
 
-function parseResult(result: any) {
-  if (result?.details) return result.details;
-  if (result?.content?.[0]?.text) {
-    try { return JSON.parse(result.content[0].text); } catch {}
-  }
-  return result;
-}
+const AGENTS_DIR = "/home/node/.openclaw/agents";
 
-// Fuzzy match model name — strip provider prefix or match suffix
 function resolveModel(model: string): string {
   if (!model) return "";
-  // Already exact match
   if (MODEL_PRICING[model]) return model;
-  // Try matching by suffix (e.g. "claude-sonnet-4-6" → "anthropic/claude-sonnet-4-6")
   for (const key of Object.keys(MODEL_PRICING)) {
     if (key.endsWith(model) || model.endsWith(key.split("/").pop()!)) return key;
   }
   return model;
 }
 
-export async function sessions() {
-  const raw = await callTool("sessions_list", { limit: 100 });
-  const data = parseResult(raw);
-  const list = data?.sessions || data || [];
+// Read all agents' sessions.json via exec
+async function getAllSessions(): Promise<any[]> {
+  const result = await callTool("exec", {
+    command: `node -e "
+const fs = require('fs'), path = require('path');
+const base = '${AGENTS_DIR}';
+const agents = fs.readdirSync(base).filter(a => fs.existsSync(path.join(base,a,'sessions','sessions.json')));
+const all = [];
+for (const agent of agents) {
+  try {
+    const data = JSON.parse(fs.readFileSync(path.join(base,agent,'sessions','sessions.json'),'utf8'));
+    for (const [key, val] of Object.entries(data)) {
+      all.push({ agentId: agent, key, ...val });
+    }
+  } catch(e) {}
+}
+console.log(JSON.stringify(all));
+"`
+  });
 
-  return list.map((s: any) => {
+  const text = result?.stdout || result?.output || (typeof result === "string" ? result : "");
+  try {
+    const lines = text.trim().split("\n");
+    return JSON.parse(lines[lines.length - 1]);
+  } catch { return []; }
+}
+
+export async function sessions() {
+  const all = await getAllSessions();
+  return all.map((s: any) => {
     const model = resolveModel(s.model || "");
     const totalTokens = s.totalTokens || 0;
-    // Rough estimate: 70% input, 30% output
     const cost = calcCost(model, totalTokens * 0.7, totalTokens * 0.3);
     return {
-      sessionKey: s.key || s.sessionKey,
-      agentId: (s.key || "").split(":")?.[1] || "main",
+      sessionKey: s.key,
+      agentId: s.agentId,
       model,
-      kind: s.kind,
-      channel: s.channel,
-      displayName: s.displayName,
+      kind: s.kind || "session",
+      channel: s.deliveryContext?.channel || s.lastChannel || "",
+      displayName: s.origin?.label || s.displayName || s.key,
       lastActivity: s.updatedAt,
       totalTokens,
-      contextTokens: s.contextTokens,
+      contextTokens: s.contextTokens || 0,
       sessionId: s.sessionId,
       cost: `$${cost.toFixed(6)} USD`,
       costRaw: cost,
@@ -53,7 +67,12 @@ export async function sessionDetail(sessionKey: string) {
     includeTools: true,
     limit: 500,
   });
-  const data = parseResult(raw);
+
+  let data: any = null;
+  if (raw?.details) data = raw.details;
+  else if (raw?.content?.[0]?.text) {
+    try { data = JSON.parse(raw.content[0].text); } catch {}
+  }
   const messages = data?.messages || [];
 
   const steps: any[] = [];
@@ -67,29 +86,26 @@ export async function sessionDetail(sessionKey: string) {
           if (block.type === "tool_use" || block.type === "toolCall") {
             const name = block.name;
             const inp = block.input || block.arguments || {};
-            steps.push({
-              tool: name,
-              args: summarizeArgs(name, inp),
-            });
+            steps.push({ tool: name, args: summarizeArgs(name, inp) });
           }
         }
       }
     }
   }
 
-  // Also get totalTokens from sessions_list for this session
-  const sessionList = await sessions();
-  const sessionInfo = sessionList.find(s => s.sessionKey === sessionKey);
-  const totalTokens = sessionInfo?.totalTokens || 0;
-  const resolvedModel = model || sessionInfo?.model || "";
+  const allSessions = await getAllSessions();
+  const info = allSessions.find(s => s.key === sessionKey);
+  const totalTokens = info?.totalTokens || 0;
+  const resolvedModel = model || resolveModel(info?.model || "");
   const cost = calcCost(resolvedModel, totalTokens * 0.7, totalTokens * 0.3);
 
   return {
     sessionKey,
+    agentId: info?.agentId,
     model: resolvedModel,
-    displayName: sessionInfo?.displayName,
+    displayName: info?.origin?.label || sessionKey,
     steps,
-    tokens: { total: totalTokens, note: "Approximate (current context window)" },
+    tokens: { total: totalTokens, note: "Current context window" },
     cost: `$${cost.toFixed(6)} USD`,
     messageCount: messages.length,
     stepCount: steps.length,
@@ -98,21 +114,26 @@ export async function sessionDetail(sessionKey: string) {
 
 export async function summary() {
   const list = await sessions();
-
-  let totalTokens = 0;
-  let totalCost = 0;
+  let totalTokens = 0, totalCost = 0;
   const byModel: Record<string, { sessions: number; tokens: number; cost: number }> = {};
+  const byAgent: Record<string, { sessions: number; tokens: number; cost: number }> = {};
 
   for (const s of list) {
-    totalTokens += s.totalTokens || 0;
-    totalCost += s.costRaw || 0;
+    totalTokens += s.totalTokens;
+    totalCost += s.costRaw;
 
     if (s.model) {
       byModel[s.model] = byModel[s.model] || { sessions: 0, tokens: 0, cost: 0 };
       byModel[s.model].sessions++;
-      byModel[s.model].tokens += s.totalTokens || 0;
-      byModel[s.model].cost += s.costRaw || 0;
+      byModel[s.model].tokens += s.totalTokens;
+      byModel[s.model].cost += s.costRaw;
     }
+
+    const aid = s.agentId || "unknown";
+    byAgent[aid] = byAgent[aid] || { sessions: 0, tokens: 0, cost: 0 };
+    byAgent[aid].sessions++;
+    byAgent[aid].tokens += s.totalTokens;
+    byAgent[aid].cost += s.costRaw;
   }
 
   return {
@@ -120,13 +141,12 @@ export async function summary() {
     totalTokens,
     totalCost: `$${totalCost.toFixed(6)} USD`,
     byModel: Object.fromEntries(
-      Object.entries(byModel).map(([k, v]) => [
-        k,
-        { ...v, costStr: `$${v.cost.toFixed(6)} USD` }
-      ])
+      Object.entries(byModel).map(([k, v]) => [k, { ...v, costStr: `$${v.cost.toFixed(6)}` }])
+    ),
+    byAgent: Object.fromEntries(
+      Object.entries(byAgent).map(([k, v]) => [k, { ...v, costStr: `$${v.cost.toFixed(6)}` }])
     ),
     pricing: MODEL_PRICING,
-    note: "Token counts reflect current active context windows only. Historical sessions not tracked.",
   };
 }
 
