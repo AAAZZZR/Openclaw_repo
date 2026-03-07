@@ -1,45 +1,14 @@
-import { callTool, calcCost, MODEL_PRICING } from "./index";
+import { calcCost, MODEL_PRICING } from "./index";
 
-const AGENTS_DIR = "/home/node/.openclaw/agents";
+const DATA_API = process.env.DATA_API_URL || "http://localhost:18790";
 
-function resolveModel(model: string): string {
-  if (!model) return "";
-  if (MODEL_PRICING[model]) return model;
-  for (const key of Object.keys(MODEL_PRICING)) {
-    if (key.endsWith(model) || model.endsWith(key.split("/").pop()!)) return key;
-  }
-  return model;
-}
-
-// Read all agents' sessions.json via exec
-async function getAllSessions(): Promise<any[]> {
-  const result = await callTool("exec", {
-    command: `node -e "
-const fs = require('fs'), path = require('path');
-const base = '${AGENTS_DIR}';
-const agents = fs.readdirSync(base).filter(a => fs.existsSync(path.join(base,a,'sessions','sessions.json')));
-const all = [];
-for (const agent of agents) {
-  try {
-    const data = JSON.parse(fs.readFileSync(path.join(base,agent,'sessions','sessions.json'),'utf8'));
-    for (const [key, val] of Object.entries(data)) {
-      all.push({ agentId: agent, key, ...val });
-    }
-  } catch(e) {}
-}
-console.log(JSON.stringify(all));
-"`
-  });
-
-  const text = result?.stdout || result?.output || (typeof result === "string" ? result : "");
-  try {
-    const lines = text.trim().split("\n");
-    return JSON.parse(lines[lines.length - 1]);
-  } catch { return []; }
+async function dataFetch(path: string) {
+  const res = await fetch(`${DATA_API}${path}`);
+  return res.json() as Promise<any>;
 }
 
 export async function sessions() {
-  const all = await getAllSessions();
+  const all = await dataFetch("/api/sessions");
   return all.map((s: any) => {
     const model = resolveModel(s.model || "");
     const totalTokens = s.totalTokens || 0;
@@ -93,8 +62,8 @@ export async function sessionDetail(sessionKey: string) {
     }
   }
 
-  const allSessions = await getAllSessions();
-  const info = allSessions.find(s => s.key === sessionKey);
+  const allSessions = await dataFetch("/api/sessions");
+  const info = allSessions.find((s: any) => s.sessionKey === sessionKey);
   const totalTokens = info?.totalTokens || 0;
   const resolvedModel = model || resolveModel(info?.model || "");
   const cost = calcCost(resolvedModel, totalTokens * 0.7, totalTokens * 0.3);
@@ -113,41 +82,7 @@ export async function sessionDetail(sessionKey: string) {
 }
 
 export async function summary() {
-  const list = await sessions();
-  let totalTokens = 0, totalCost = 0;
-  const byModel: Record<string, { sessions: number; tokens: number; cost: number }> = {};
-  const byAgent: Record<string, { sessions: number; tokens: number; cost: number }> = {};
-
-  for (const s of list) {
-    totalTokens += s.totalTokens;
-    totalCost += s.costRaw;
-
-    if (s.model) {
-      byModel[s.model] = byModel[s.model] || { sessions: 0, tokens: 0, cost: 0 };
-      byModel[s.model].sessions++;
-      byModel[s.model].tokens += s.totalTokens;
-      byModel[s.model].cost += s.costRaw;
-    }
-
-    const aid = s.agentId || "unknown";
-    byAgent[aid] = byAgent[aid] || { sessions: 0, tokens: 0, cost: 0 };
-    byAgent[aid].sessions++;
-    byAgent[aid].tokens += s.totalTokens;
-    byAgent[aid].cost += s.costRaw;
-  }
-
-  return {
-    totalSessions: list.length,
-    totalTokens,
-    totalCost: `$${totalCost.toFixed(6)} USD`,
-    byModel: Object.fromEntries(
-      Object.entries(byModel).map(([k, v]) => [k, { ...v, costStr: `$${v.cost.toFixed(6)}` }])
-    ),
-    byAgent: Object.fromEntries(
-      Object.entries(byAgent).map(([k, v]) => [k, { ...v, costStr: `$${v.cost.toFixed(6)}` }])
-    ),
-    pricing: MODEL_PRICING,
-  };
+  return dataFetch("/api/summary");
 }
 
 function summarizeArgs(tool: string, input: any): string {
