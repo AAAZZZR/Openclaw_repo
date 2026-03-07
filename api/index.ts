@@ -1,7 +1,9 @@
 import { sessions, summary, sessionDetail } from "./handlers";
+import { readFileSync } from "fs";
+import { join } from "path";
 
-const GATEWAY_URL = process.env.OPENCLAW_GATEWAY_URL || "http://localhost:18789";
-const GATEWAY_TOKEN = process.env.OPENCLAW_GATEWAY_TOKEN || "";
+export const GATEWAY_URL = process.env.OPENCLAW_GATEWAY_URL || "http://localhost:18789";
+export const GATEWAY_TOKEN = process.env.OPENCLAW_GATEWAY_TOKEN || "";
 
 export async function callTool(tool: string, args: Record<string, unknown> = {}) {
   const res = await fetch(`${GATEWAY_URL}/tools/invoke`, {
@@ -12,12 +14,11 @@ export async function callTool(tool: string, args: Record<string, unknown> = {})
     },
     body: JSON.stringify({ tool, args }),
   });
-  const data = await res.json();
+  const data = await res.json() as any;
   if (!data.ok) throw new Error(data.error?.message || "Tool call failed");
   return data.result;
 }
 
-// Model pricing (USD per 1M tokens)
 export const MODEL_PRICING: Record<string, { input: number; output: number }> = {
   "anthropic/claude-sonnet-4-6": { input: 3.0, output: 15.0 },
   "anthropic/claude-haiku-4-5": { input: 0.8, output: 4.0 },
@@ -33,7 +34,10 @@ export function calcCost(model: string, inputTokens: number, outputTokens: numbe
   return (inputTokens / 1_000_000) * pricing.input + (outputTokens / 1_000_000) * pricing.output;
 }
 
-export default {
+const PORT = parseInt(process.env.PORT || "3000");
+
+const server = Bun.serve({
+  port: PORT,
   async fetch(req: Request): Promise<Response> {
     const url = new URL(req.url);
     const path = url.pathname;
@@ -44,16 +48,20 @@ export default {
     };
 
     try {
-      if (path === "/api/sessions") return Response.json(await sessions(), { headers: cors });
+      if (path === "/api/sessions") {
+        return Response.json(await sessions(), { headers: cors });
+      }
       if (path.startsWith("/api/sessions/")) {
-        const id = path.replace("/api/sessions/", "");
+        const id = decodeURIComponent(path.replace("/api/sessions/", ""));
         return Response.json(await sessionDetail(id), { headers: cors });
       }
-      if (path === "/api/summary") return Response.json(await summary(), { headers: cors });
+      if (path === "/api/summary") {
+        return Response.json(await summary(), { headers: cors });
+      }
 
-      // Serve HTML dashboard
+      // Serve HTML
       if (path === "/" || path === "/index.html") {
-        const html = await Bun.file("./public/index.html").text();
+        const html = readFileSync(join(import.meta.dir, "../public/index.html"), "utf-8");
         return new Response(html, { headers: { "Content-Type": "text/html" } });
       }
 
@@ -62,4 +70,6 @@ export default {
       return Response.json({ error: e.message }, { status: 500, headers: cors });
     }
   },
-};
+});
+
+console.log(`🐾 OpenClaw Dashboard running on port ${server.port}`);
