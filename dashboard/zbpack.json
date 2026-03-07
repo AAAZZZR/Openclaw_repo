@@ -1,0 +1,4 @@
+{
+  "build_command": "bun install",
+  "start_command": "bun run api/index.ts"
+}
