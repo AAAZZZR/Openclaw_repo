@@ -75,6 +75,89 @@ function getAllSessions() {
   return all;
 }
 
+function getSessionDetail(sessionKey) {
+  // Find which agent owns this session
+  const agents = fs.readdirSync(AGENTS_DIR).filter(a =>
+    fs.existsSync(path.join(AGENTS_DIR, a, "sessions", "sessions.json"))
+  );
+
+  let agentId = null, sessionId = null, model = "";
+  for (const agent of agents) {
+    try {
+      const data = JSON.parse(fs.readFileSync(path.join(AGENTS_DIR, agent, "sessions", "sessions.json"), "utf8"));
+      if (data[sessionKey]) {
+        agentId = agent;
+        sessionId = data[sessionKey].sessionId;
+        model = data[sessionKey].model || "";
+        break;
+      }
+    } catch {}
+  }
+
+  if (!sessionId) return { sessionKey, steps: [], error: "Session not found" };
+
+  // Read ALL jsonl files for this agent (current + historical)
+  const sessionsDir = path.join(AGENTS_DIR, agentId, "sessions");
+  const jsonlFiles = fs.readdirSync(sessionsDir)
+    .filter(f => f.endsWith(".jsonl"))
+    .map(f => path.join(sessionsDir, f));
+
+  const lines = [];
+  for (const f of jsonlFiles) {
+    try { lines.push(...fs.readFileSync(f, "utf8").split("\n").filter(Boolean)); }
+    catch {}
+  }
+  const steps = [];
+  let messageCount = 0;
+
+  for (const line of lines) {
+    let msg;
+    try { msg = JSON.parse(line); } catch { continue; }
+
+    if (msg.type !== "message") continue;
+    const m = msg.message || {};
+    messageCount++;
+
+    if (m.role === "assistant" && Array.isArray(m.content)) {
+      if (m.model) model = m.model;
+      for (const block of m.content) {
+        if (block.type === "toolCall") {
+          const inp = block.arguments || {};
+          let args = "";
+          const name = block.name;
+          if (name === "Read" || name === "read") args = inp.path || inp.file_path || "";
+          else if (name === "exec") args = (inp.command || "").slice(0, 100);
+          else if (name === "web_search") args = inp.query || "";
+          else if (name === "web_fetch") args = inp.url || "";
+          else if (name === "memory_search") args = inp.query || "";
+          else if (name === "Edit" || name === "Write") args = inp.path || inp.file_path || "";
+          else if (name === "message") args = `action=${inp.action || ""} target=${inp.target || ""}`;
+          else args = JSON.stringify(inp).slice(0, 100);
+          steps.push({ tool: name, args, ts: msg.timestamp });
+        }
+      }
+    }
+  }
+
+  const resolvedModel = resolveModel(model);
+  const allSessions = getAllSessions();
+  const info = allSessions.find(s => s.sessionKey === sessionKey);
+  const totalTokens = info?.totalTokens || 0;
+  const cost = calcCost(resolvedModel, totalTokens * 0.7, totalTokens * 0.3);
+
+  return {
+    sessionKey,
+    agentId,
+    model: resolvedModel,
+    displayName: info?.displayName || sessionKey,
+    steps,
+    stepCount: steps.length,
+    messageCount,
+    tokens: { total: totalTokens },
+    cost: "$" + cost.toFixed(6) + " USD",
+  };
+}
+
 function getSnapshotHistory() {
   if (!fs.existsSync(SNAPSHOT_LOG)) return [];
   return fs.readFileSync(SNAPSHOT_LOG, "utf8")
@@ -142,8 +225,21 @@ const server = http.createServer((req, res) => {
     if (p === "/api/history") {
       return json(res, getSnapshotHistory());
     }
+    if (p.startsWith("/api/sessions/")) {
+      const key = decodeURIComponent(p.replace("/api/sessions/", ""));
+      return json(res, getSessionDetail(key));
+    }
     if (p === "/health") {
       return json(res, { ok: true, ts: new Date().toISOString() });
+    }
+    // Serve dashboard HTML
+    if (p === "/" || p === "/index.html") {
+      const htmlPath = path.join(__dirname, "../Openclaw_repo/public/index.html");
+      if (fs.existsSync(htmlPath)) {
+        const html = fs.readFileSync(htmlPath, "utf8");
+        res.writeHead(200, { "Content-Type": "text/html" });
+        return res.end(html);
+      }
     }
     json(res, { error: "Not found" }, 404);
   } catch (e) {
@@ -159,3 +255,4 @@ server.listen(PORT, "0.0.0.0", () => {
 
 process.on("SIGTERM", () => { try { fs.unlinkSync(PID_FILE); } catch {} process.exit(0); });
 process.on("SIGINT",  () => { try { fs.unlinkSync(PID_FILE); } catch {} process.exit(0); });
+// already done above
