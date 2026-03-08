@@ -241,8 +241,8 @@ const server = http.createServer((req, res) => {
   const url = new URL(req.url, `http://localhost:${PORT}`);
   const p = url.pathname;
 
-  // Auth check (skip for health)
-  if (p !== "/health") {
+  // Auth check (only for API routes)
+  if (p.startsWith("/api/")) {
     const auth = req.headers["authorization"] || "";
     const queryToken = url.searchParams.get("token") || "";
     const provided = auth.replace("Bearer ", "").trim() || queryToken;
