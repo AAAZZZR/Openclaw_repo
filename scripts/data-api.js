@@ -235,9 +235,22 @@ function json(res, data, status = 200) {
   res.end(body);
 }
 
+const DASHBOARD_TOKEN = process.env.DASHBOARD_TOKEN || "";
+
 const server = http.createServer((req, res) => {
   const url = new URL(req.url, `http://localhost:${PORT}`);
   const p = url.pathname;
+
+  // Auth check (skip for health)
+  if (p !== "/health") {
+    const auth = req.headers["authorization"] || "";
+    const queryToken = url.searchParams.get("token") || "";
+    const provided = auth.replace("Bearer ", "").trim() || queryToken;
+    if (DASHBOARD_TOKEN && provided !== DASHBOARD_TOKEN) {
+      res.writeHead(401, { "Content-Type": "application/json" });
+      return res.end(JSON.stringify({ error: "Unauthorized" }));
+    }
+  }
 
   try {
     if (p === "/api/sessions") {
@@ -256,11 +269,13 @@ const server = http.createServer((req, res) => {
     if (p === "/health") {
       return json(res, { ok: true, ts: new Date().toISOString() });
     }
-    // Serve dashboard HTML
+    // Serve dashboard HTML (inject token for API calls)
     if (p === "/" || p === "/index.html") {
       const htmlPath = path.join(__dirname, "../Openclaw_repo/public/index.html");
       if (fs.existsSync(htmlPath)) {
-        const html = fs.readFileSync(htmlPath, "utf8");
+        let html = fs.readFileSync(htmlPath, "utf8");
+        // Inject token so browser can call API
+        html = html.replace("const BASE = \"\";", `const BASE = ""; const API_TOKEN = "${DASHBOARD_TOKEN}";`);
         res.writeHead(200, { "Content-Type": "text/html" });
         return res.end(html);
       }

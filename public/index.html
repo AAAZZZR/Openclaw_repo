@@ -118,6 +118,7 @@
 
   <script>
     const BASE = "";
+    const API_TOKEN = ""; // injected by server
 
     async function loadAll() {
       document.getElementById("last-updated").textContent = "Updated: " + new Date().toLocaleTimeString();
@@ -125,8 +126,14 @@
       loadSessions();
     }
 
+    function apiFetch(path) {
+      return fetch(`${BASE}${path}`, {
+        headers: API_TOKEN ? { "Authorization": `Bearer ${API_TOKEN}` } : {}
+      }).then(r => r.json());
+    }
+
     async function loadSummary() {
-      const data = await fetch(`${BASE}/api/summary`).then(r => r.json());
+      const data = await apiFetch("/api/summary");
       document.getElementById("total-sessions").textContent = data.totalSessions ?? "—";
       document.getElementById("total-cost").textContent = data.totalCost ?? "—";
       document.getElementById("total-input").textContent = fmtNum(data.totalTokens?.input);
@@ -157,7 +164,7 @@
     }
 
     async function loadSessions() {
-      const data = await fetch(`${BASE}/api/sessions`).then(r => r.json());
+      const data = await apiFetch("/api/sessions");
       const tbody = document.getElementById("sessions-table");
       if (!data.length) { tbody.innerHTML = '<tr><td colspan="5" class="loading">No sessions found</td></tr>'; return; }
       tbody.innerHTML = data.map(s => `
@@ -177,7 +184,7 @@
       document.getElementById("detail-steps").innerHTML = '<div class="loading">Loading steps...</div>';
       document.getElementById("detail-cards").innerHTML = "";
 
-      const data = await fetch(`${BASE}/api/sessions/${sessionKey}`).then(r => r.json());
+      const data = await apiFetch(`/api/sessions/${sessionKey}`);
 
       document.getElementById("detail-cards").innerHTML = `
         <div class="card"><div class="label">Model</div><div class="value" style="font-size:14px">${data.model || "—"}</div></div>
