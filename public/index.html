@@ -195,8 +195,13 @@
 
       document.getElementById("detail-steps").innerHTML = data.steps.map((s, i) => `
         <div class="step ${stepClass(s.tool)}">
-          <div class="tool">#${i+1} ${s.tool}</div>
-          ${s.args ? `<div class="args">${escHtml(s.args)}</div>` : ""}
+          <div style="display:flex;justify-content:space-between;align-items:center">
+            <div class="tool">#${i+1} ${s.tool} <span style="color:#888;font-weight:normal">×${s.count}</span></div>
+            <div style="text-align:right">
+              <span class="cost-value" style="font-size:13px">~${(s.estimatedTokens||0).toLocaleString()} tokens</span>
+            </div>
+          </div>
+          ${s.topCalls?.length ? `<div class="args">${s.topCalls.map(c => escHtml(c)).join(" · ")}</div>` : ""}
         </div>
       `).join("");
     }

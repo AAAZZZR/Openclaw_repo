@@ -107,13 +107,16 @@ function getSessionDetail(sessionKey) {
     try { lines.push(...fs.readFileSync(f, "utf8").split("\n").filter(Boolean)); }
     catch {}
   }
-  const steps = [];
   let messageCount = 0;
+
+  // Map toolCall id → tool name
+  const callMap = {};
+  // tool name → { count, totalChars }
+  const toolStats = {};
 
   for (const line of lines) {
     let msg;
     try { msg = JSON.parse(line); } catch { continue; }
-
     if (msg.type !== "message") continue;
     const m = msg.message || {};
     messageCount++;
@@ -122,22 +125,43 @@ function getSessionDetail(sessionKey) {
       if (m.model) model = m.model;
       for (const block of m.content) {
         if (block.type === "toolCall") {
+          callMap[block.id] = block.name;
+          if (!toolStats[block.name]) toolStats[block.name] = { count: 0, totalChars: 0, calls: [] };
+          toolStats[block.name].count++;
+          // store call detail for label
           const inp = block.arguments || {};
-          let args = "";
-          const name = block.name;
-          if (name === "Read" || name === "read") args = inp.path || inp.file_path || "";
-          else if (name === "exec") args = (inp.command || "").slice(0, 100);
-          else if (name === "web_search") args = inp.query || "";
-          else if (name === "web_fetch") args = inp.url || "";
-          else if (name === "memory_search") args = inp.query || "";
-          else if (name === "Edit" || name === "Write") args = inp.path || inp.file_path || "";
-          else if (name === "message") args = `action=${inp.action || ""} target=${inp.target || ""}`;
-          else args = JSON.stringify(inp).slice(0, 100);
-          steps.push({ tool: name, args, ts: msg.timestamp });
+          let label = "";
+          const n = block.name;
+          if (n === "Read" || n === "read") label = inp.path || inp.file_path || "";
+          else if (n === "exec") label = (inp.command || "").slice(0, 60);
+          else if (n === "web_search") label = inp.query || "";
+          else if (n === "web_fetch") label = inp.url || "";
+          else if (n === "memory_search") label = inp.query || "";
+          else if (n === "Edit" || n === "Write") label = inp.path || inp.file_path || "";
+          else label = JSON.stringify(inp).slice(0, 60);
+          toolStats[block.name].calls.push(label);
         }
       }
     }
+
+    // Accumulate chars from tool results
+    if (m.role === "toolResult" && m.toolCallId && callMap[m.toolCallId]) {
+      const toolName = callMap[m.toolCallId];
+      const chars = JSON.stringify(m.content || "").length;
+      if (toolStats[toolName]) toolStats[toolName].totalChars += chars;
+    }
   }
+
+  // Convert to sorted array (by estimated tokens desc)
+  const steps = Object.entries(toolStats)
+    .map(([tool, s]) => ({
+      tool,
+      count: s.count,
+      estimatedTokens: Math.round(s.totalChars / 4),
+      estimatedCost: parseFloat(calcCost(resolveModel(model), s.totalChars / 4, 0).toFixed(8)),
+      topCalls: [...new Set(s.calls.filter(Boolean))].slice(0, 3),
+    }))
+    .sort((a, b) => b.estimatedTokens - a.estimatedTokens);
 
   const resolvedModel = resolveModel(model);
   const allSessions = getAllSessions();
