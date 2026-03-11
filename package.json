@@ -1,11 +1,8 @@
 {
   "name": "openclaw-dashboard",
-  "version": "1.0.0",
-  "description": "OpenClaw Agent Dashboard - token usage, cost tracking, session steps",
+  "version": "2.0.0",
   "scripts": {
     "start": "bun run api/index.ts",
     "dev": "bun --watch run api/index.ts"
-  },
-  "dependencies": {},
-  "devDependencies": {}
+  }
 }
